@@ -81,6 +81,154 @@ module IdentityMatcher
                 return results.uniq
             end
 
+            def authsub_get(token,url,keyfile)
+                uri = URI.parse(url)
+
+                authsub = 'AuthSub'
+                authsub += ' token="' + token + '"'
+                if keyfile && !keyfile.blank?
+                    nonce = OpenSSL::Random.random_bytes(8).unpack("I")[0].to_s
+                    data = "GET #{url} #{Time.now.to_i} #{nonce}"
+                    pk = OpenSSL::PKey::RSA.new(File.read(keyfile))
+                    sig = pk.sign(OpenSSL::Digest::SHA1.new, data)
+                    sig = Base64.encode64(sig).gsub(/\n/,"")
+                    authsub += ' sigalg="rsa-sha1"'
+                    authsub += ' data="' + data + '"'
+                    authsub += ' sig="' + sig + '"'
+                end
+
+                uri = URI.parse(url)
+                req = Net::HTTP.new(uri.host, uri.port)
+                if uri.scheme == 'https'
+                    req.use_ssl=true
+                end
+                res = req.start { |http|
+                    path = uri.path
+                    if uri.query
+                        path += "?" + uri.query
+                    end
+                    http.request_get(path, { "Authorization" => authsub })
+                }
+                return res
+            end
+
+            def upgrade_gmail_token(token, keyfile="#{RAILS_ROOT}/db/dopplr_google.key")
+                token_result = self.authsub_get(token,"https://www.google.com/accounts/AuthSubSessionToken",keyfile)
+                if token_result.body.match(/^Token=(.*)$/)
+                    return $1
+                else
+                    return nil
+                end
+            end
+
+            def match_windowslive(token, initfile="#{RAILS_ROOT}/db/windowslive.xml")
+                def to_signed(n)
+                    length = 64
+
+                    mid = 2**(length-1)
+                    max_unsigned = 2**length
+                    return (n>=mid) ? n - max_unsigned : n
+                end
+
+                require 'hpricot'
+                require 'windowslivelogin'
+                wll = WindowsLiveLogin.initFromXml(initfile)
+
+                consent = wll.processConsentToken(token)
+                email = []
+                if !consent.nil?
+                    lid = to_signed(consent.locationid.to_i(16))
+
+                    url = "https://livecontacts.services.live.com/users/@C@#{lid}/REST/LiveContacts/Contacts"
+                    auth = 'DelegatedToken dt="' + CGI.unescape(consent.delegationtoken) + '"'
+                    uri = URI.parse(url)
+                    req = Net::HTTP.new(uri.host, uri.port)
+                    req.use_ssl = true
+                    res = req.start { |http|
+                        http.request_get(uri.path, { "Authorization" => auth })
+                    }
+                    xml = res.body
+                    contacts = []
+                    Hpricot.parse(xml).search("//contact").each { |e| 
+                        firstname = e.search("profiles/personal/firstname/text()")
+                        if firstname.nil?
+                            firstname = ""
+                        end
+                        lastname = e.search("profiles/personal/lastname/text()")
+                        if lastname.nil?
+                            lastname = ""
+                        end
+                        name = "#{firstname} #{lastname}".strip
+                        e.search("emails/email/address/text()").each { |email|
+                            contacts << {
+                                :name => name,
+                                :email => email.to_s
+                            }
+                        }
+                    }
+                end
+                users = self.find_all_by_email(contacts.map { |c| c[:email] }).uniq
+                emails = users.map(&:email).uniq
+                names = users.map(&:name).uniq
+                unused = []
+                contacts.each do |contact|
+                    if !emails.include?(contact[:email]) and !names.include?(contact[:name])
+                        unused << contact
+                    end
+                end
+                return [users, unused]
+            end
+
+            def match_gmail_api(token, since=nil, keyfile="#{RAILS_ROOT}/db/dopplr_google.key")
+                require 'open-uri'
+                require 'openssl'
+                require 'base64'
+                begin
+                    require 'hpricot'
+                rescue MissingSourceFile
+                    puts "Please install Hpricot"
+                    return []
+                end
+
+                pagesize = 500
+                base_url = "http://www.google.com/m8/feeds/contacts/default/base?max-results=#{pagesize}"
+                if since and since.respond_to?("strftime")
+                    time = since.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+                    base_url += "&updated-min=#{time}"
+                end
+                more_results = true
+                contacts = []
+                index = 1
+                while more_results
+                    url = base_url + "&start-index=#{index}"
+                    res = self.authsub_get(token, url, keyfile)
+
+                    # debugging capture
+                    # open("/tmp/#{token}_#{index}.xml","w").write(res.body)
+                    h = Hpricot.XML(res.body)
+                    h.search("//entry").each { |em| 
+                        if em.at("gd:email")
+                            contacts << { 'name' => em.at("title/text()") }.merge(em.at("gd:email").attributes )
+                        end
+                    }
+                    total = h.at("openSearch:totalResults/text()").to_s.to_i
+                    start = h.at("openSearch:startIndex/text()").to_s.to_i
+                    if start + pagesize < total
+                        index += pagesize
+                    else
+                        more_results = false
+                    end
+                end
+
+                users = self.find_all_by_email(contacts.map { |contact| contact["address"] }).uniq
+                emails = users.map(&:email)
+                names = users.map(&:name)
+                unused_contacts = contacts.select { |contact| 
+                    !emails.include?(contact["email"]) && !names.include?(contact["name"])
+                }
+                return [users, unused_contacts.map { |contact| { :name => contact["name"], :email => contact["address"] } }]
+            end
+
             def match_gmail(username,password)
                 begin
                     require 'gmailer'
@@ -98,6 +246,62 @@ module IdentityMatcher
                 }
                 return [users, unused_contacts.map { |contact| { :name => contact.name, :email => contact.email } }]
                 #return users
+            end
+
+            def match_google_socialgraph(url)
+                data = google_socialgraph_query(url)
+                twitternicks = []
+                emails = []
+                urls = []
+                possible_urls = []
+                data['nodes'].each_pair do |u, data|
+                    possible_urls += data['nodes_referenced'].keys
+                    possible_urls += data['nodes_referenced_by'].keys
+                end
+
+                possible_urls.uniq.each do |url|
+                    if url.starts_with?("sgn:")
+                        kind, ident = parse_socialgraph_url(url)
+                        if !kind.nil?
+                            case kind
+                            when 'twitter'
+                                twitternicks << ident
+                            end
+                        end
+                    else
+                        urls << url
+                    end
+                end
+
+                users = []
+                users += Openid.find_all_by_url(urls).map { |openid| openid.traveller }
+                users += Openid.find_all_by_url(urls.map { |url| url + "/" }).map { |openid| openid.traveller }
+                users += Traveller.find_all_by_twitternick(twitternicks.uniq)
+                users += Traveller.find_all_by_email(emails)
+                return [users.uniq, []]
+            end
+
+            def parse_socialgraph_url(url)
+                require 'uri'
+                uri = URI.parse(url)
+                kind = nil
+                ident = nil
+                if uri.scheme == 'sgn'
+                    if uri.host.downcase.match(/([a-z0-9]+)\.com/)
+                        kind = $1
+                    end
+                    if uri.query.downcase.match(/ident=(.+)/)
+                        ident = $1
+                    end
+                end
+                return [kind, ident]
+            end
+
+            def google_socialgraph_query(url)
+                require 'json'
+                require 'open-uri'
+                url = "http://socialgraph.apis.google.com/lookup?q=" + CGI.escape(url) + "&fme=1&edo=1&edi=1&pretty=1&sgn=1"
+                return JSON.parse(open(url).read)
             end
 
             def match_hcard(url=nil,uploaded=nil)
@@ -121,6 +325,13 @@ module IdentityMatcher
                 }.map { |hcard|
                         hcard.email
                 }.flatten
+
+                sha1sums = hcards.select { |hcard|
+                    hcard.properties.include? "foaf_mbox_sha1sum"
+                }.map { |hcard|
+                        hcard.foaf_mbox_sha1sum
+                }.flatten
+
                 urls = hcards.select { |hcard|
                     hcard.properties.include? "url"
                 }.map { |hcard|
@@ -128,6 +339,10 @@ module IdentityMatcher
                 }.flatten
 
                 results = self.find_all_by_email(emails)
+                if sha1sums.size > 0
+                    results += self.find(:all, :conditions => [ 'sha1(concat("mailto:", email)) IN (?)', sha1sums ] )
+                end
+
                 begin
                     results += Openid.find_all_by_url(urls).map { |openid| openid.traveller }
                     results += Openid.find_all_by_url(urls.map { |url| url + "/" }).map { |openid| openid.traveller }
