@@ -276,8 +276,8 @@ module IdentityMatcher
                 users = []
                 users += Openid.find_all_by_url(urls).map { |openid| openid.traveller }
                 users += Openid.find_all_by_url(urls.map { |url| url + "/" }).map { |openid| openid.traveller }
-                users += Traveller.find_all_by_twitternick(twitternicks.uniq)
-                users += Traveller.find_all_by_email(emails)
+                users += self.find_all_by_twitternick(twitternicks.uniq)
+                users += self.find_all_by_email(emails)
                 return [users.uniq, []]
             end
 

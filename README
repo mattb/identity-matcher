@@ -14,7 +14,9 @@ matches_identities
 and your user model will gain the following methods:
 
 User.match_gmail(username, password)
+User.match_gmail_api(authsub_token)
 User.match_twitter(nick)
+User.match_hcard(url)
 etc...
 
 The return value is a two-element list. The first element is a list of User objects that match the identities found in the external source. The second element, if available for that mode of matching, is a list of found external identities, giving their name and email address in a hash.
