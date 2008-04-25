@@ -26,4 +26,4 @@ Restrictions
 
 The code assumes that your user model uses the field 'email' for email address and 'nick' for screen name. A future version will parameterise this.
 
-Copyright (c) 2007 Matt Biddulph, released under the MIT license
+Copyright (c) 2007-2008 Matt Biddulph, released under the MIT license
