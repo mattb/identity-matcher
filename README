@@ -26,4 +26,10 @@ Restrictions
 
 The code assumes that your user model uses the field 'email' for email address and 'nick' for screen name. A future version will parameterise this.
 
+Contributing
+============
+
+Git source repository: http://github.com/mattb/identity-matcher/tree/master
+Please feel free to fork the project at GitHub and submit pull requests or patches.
+
 Copyright (c) 2007-2008 Matt Biddulph, released under the MIT license
