@@ -179,6 +179,48 @@ module IdentityMatcher
                 return [users, unused]
             end
 
+            # Use the plugin at http://chuddup.com/blog/archive/27/drop-in-yahoo-browser-
+            # to create a yahoo config file and obtain wssid and auth_cookie credentials
+            # for this method
+            def match_yahoo(wssid,auth_cookie)
+                require 'json'
+
+                contacts = []
+
+                url = "http://address.yahooapis.com/v1/searchContacts?format=json&WSSID=#{wssid}&appid=#{Yahoo.config['application_id']}"
+                uri = URI.parse(url)
+                req = Net::HTTP.new(uri.host, uri.port)
+                if uri.scheme == 'https'
+                    req.use_ssl=true
+                end
+                res = req.start { |http|
+                    path = uri.path
+                    if uri.query
+                        path += "?" + uri.query
+                    end
+                    http.request_get(path, { "Cookie" => auth_cookie })
+                }
+                data = JSON.parse(res.body)
+
+                data['contacts'].each { |contact|
+                    found = {}
+                    fields = contact['fields']
+                    fields.select { |field| field['type'] == 'email' }.each { |field| found['address'] = field['data'] }
+                    fields.select { |field| field['type'] == 'name' }.each { |field| found['name'] = "#{field['first']} #{field['last']}".strip }
+                    if found.has_key?('address')
+                        contacts << found
+                    end
+                }
+
+                users = self.find_all_by_email(contacts.map { |contact| contact["address"] }).uniq
+                emails = users.map(&:email)
+                names = users.map(&:name)
+                unused_contacts = contacts.select { |contact| 
+                    !emails.include?(contact["email"]) && !names.include?(contact["name"])
+                }
+                return [users, unused_contacts.map { |contact| { :name => contact["name"], :email => contact["address"] } }]
+            end
+
             def match_gmail_api(token, since=nil, keyfile="#{RAILS_ROOT}/db/dopplr_google.key")
                 require 'open-uri'
                 require 'openssl'
