@@ -19,6 +19,8 @@ module IdentityMatcher
                 # add class and istance methods
                 cattr_accessor :im_options
                 self.im_options = options
+                self.im_options[:nickname_field]  ||= :nick
+                self.im_options[:email_field]     ||= :email
 
          class_eval <<-END
            include IdentityMatcher::Methods::InstanceMethods    
@@ -73,7 +75,7 @@ module IdentityMatcher
                 nicks = nicks.map { |nick| nick.gsub(/(^"|"$)/,"") }
                 names = names.map { |name| name.gsub(/(^"|"$)/,"") }
                 results = []
-                results += self.find_all_by_nick(nicks)
+                results += self.send("find_all_by_#{self.im_options[:nickname_field]}", nicks)
                 results = results.select { |x| names.include?(x.name) }.uniq
 
                 urls = nicks.map { |nick| "http://" + nick + ".livejournal.com/" }
@@ -167,7 +169,7 @@ module IdentityMatcher
                         }
                     }
                 end
-                users = self.find_all_by_email(contacts.map { |c| c[:email] }).uniq
+                users = self.send("find_all_by_#{self.im_options[:email_field]}", contacts.map { |c| c[:email] }).uniq
                 emails = users.map(&:email).uniq
                 names = users.map(&:name).uniq
                 unused = []
@@ -212,7 +214,7 @@ module IdentityMatcher
                     end
                 }
 
-                users = self.find_all_by_email(contacts.map { |contact| contact["address"] }).uniq
+                users = self.send("find_all_by_#{self.im_options[:email_field]}", contacts.map { |contact| contact["address"] }).uniq
                 emails = users.map(&:email)
                 names = users.map(&:name)
                 unused_contacts = contacts.select { |contact| 
@@ -262,7 +264,7 @@ module IdentityMatcher
                     end
                 end
 
-                users = self.find_all_by_email(contacts.map { |contact| contact["address"] }).uniq
+                users = self.send("find_all_by_#{self.im_options[:email_field]}", contacts.map { |contact| contact["address"] }).uniq
                 emails = users.map(&:email)
                 names = users.map(&:name)
                 unused_contacts = contacts.select { |contact| 
@@ -280,7 +282,7 @@ module IdentityMatcher
                 end
                 gmail = GMailer.connect(username, password)
                 contacts = gmail.fetch(:contact => "all")
-                users = self.find_all_by_email(contacts.map(&:email)).uniq
+                users = self.send("find_all_by_#{self.im_options[:email_field]}", contacts.map(&:email)).uniq
                 emails = users.map(&:email)
                 names = users.map(&:name)
                 unused_contacts = contacts.select { |contact| 
@@ -319,7 +321,7 @@ module IdentityMatcher
                 users += Openid.find_all_by_url(urls).map { |openid| openid.traveller }
                 users += Openid.find_all_by_url(urls.map { |url| url + "/" }).map { |openid| openid.traveller }
                 users += self.find_all_by_twitternick(twitternicks.uniq)
-                users += self.find_all_by_email(emails)
+                users += self.send("find_all_by_#{self.im_options[:email_field]}", emails)
                 return [users.uniq, []]
             end
 
@@ -380,7 +382,7 @@ module IdentityMatcher
                         hcard.url
                 }.flatten
 
-                results = self.find_all_by_email(emails)
+                results = self.send("find_all_by_#{self.im_options[:email_field]}", emails)
                 if sha1sums.size > 0
                     results += self.find(:all, :conditions => [ 'sha1(concat("mailto:", email)) IN (?)', sha1sums ] )
                 end
@@ -417,7 +419,7 @@ module IdentityMatcher
                     hcard.fn
                 }
                 results = []
-                results += self.find_all_by_nick(nicks)
+                results += self.send("find_all_by_#{self.im_options[:nickname_field]}", nicks)
                 results = results.select { |x| names.include?(x.name) }.uniq
                 return [results, []]
             end

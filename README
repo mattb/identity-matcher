@@ -9,22 +9,21 @@ Example
 
 Add this line to your app's User model:
 
-matches_identities
+  matches_identities :nickname_field => 'username', :email_field => 'work_email'
 
 and your user model will gain the following methods:
 
-User.match_gmail(username, password)
-User.match_gmail_api(authsub_token)
-User.match_twitter(nick)
-User.match_hcard(url)
-etc...
+  User.match_gmail(username, password)
+  User.match_gmail_api(authsub_token)
+  User.match_twitter(nick)
+  User.match_hcard(url)
+  etc...
 
 The return value is a two-element list. The first element is a list of User objects that match the identities found in the external source. The second element, if available for that mode of matching, is a list of found external identities that weren't matched, giving their name and email address in a hash.
 
-Restrictions
-============
-
-The code assumes that your user model uses the field 'email' for email address and 'nick' for screen name. A future version will parameterise this.
+The default values for matches_identities are:
+  :nickname_field => 'nick'
+  :email_field => 'email'
 
 Contributing
 ============
